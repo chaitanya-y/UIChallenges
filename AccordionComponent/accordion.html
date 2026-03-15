@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reusable Accessible Accordion</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 40px;
+        font-family: Arial, sans-serif;
+        background: #f5f5f5;
+      }
+
+      .accordion {
+        max-width: 720px;
+        margin: 0 auto;
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 12px;
+        overflow: hidden;
+      }
+
+      .accordion__item + .accordion__item {
+        border-top: 1px solid #e5e5e5;
+      }
+
+      .accordion__header {
+        margin: 0;
+      }
+
+      .accordion__trigger {
+        width: 100%;
+        border: 0;
+        background: #fff;
+        text-align: left;
+        padding: 18px 20px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .accordion__trigger:hover {
+        background: #f8f8f8;
+      }
+
+      .accordion__trigger:focus-visible {
+        outline: 2px solid #111;
+        outline-offset: -2px;
+      }
+
+      .accordion__icon {
+        font-size: 20px;
+        line-height: 1;
+        transition: transform 0.2s ease;
+      }
+
+      .accordion__trigger[aria-expanded="true"] .accordion__icon {
+        transform: rotate(45deg);
+      }
+
+      .accordion__panel {
+        padding: 0 20px 20px;
+      }
+
+      .accordion__panel[hidden] {
+        display: none;
+      }
+
+      .accordion__panel p,
+      .accordion__panel ul {
+        margin: 0;
+      }
+
+      .controls {
+        max-width: 720px;
+        margin: 0 auto 16px;
+        display: flex;
+        gap: 12px;
+      }
+
+      .controls button {
+        padding: 10px 14px;
+        border: 1px solid #ccc;
+        background: white;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="controls">
+      <button id="destroy-btn">Destroy</button>
+      <button id="create-btn">Create</button>
+    </div>
+
+    <div id="faq-accordion"></div>
+
+    <script>
+      class Accordion {
+        static instanceCount = 0;
+
+        constructor({
+          container,
+          items = [],
+          multiple = false,
+          defaultOpenIndices = [],
+          ariaLabel = "Accordion",
+          onChange = null
+        }) {
+          this.root =
+            typeof container === "string"
+              ? document.querySelector(container)
+              : container;
+
+          if (!this.root) {
+            throw new Error("Accordion: container not found.");
+          }
+
+          if (!Array.isArray(items) || items.length === 0) {
+            throw new Error("Accordion: items must be a non-empty array.");
+          }
+
+          this.items = items;
+          this.multiple = multiple;
+          this.ariaLabel = ariaLabel;
+          this.onChange = typeof onChange === "function" ? onChange : null;
+          this.instanceId = `accordion-${Accordion.instanceCount++}`;
+
+          this.openIndices = this.getInitialOpenIndices(defaultOpenIndices);
+
+          this.render();
+          this.cacheDom();
+          this.bindEvents();
+        }
+
+        getInitialOpenIndices(defaultOpenIndices) {
+          if (!Array.isArray(defaultOpenIndices)) {
+            return new Set();
+          }
+
+          const safeIndices = defaultOpenIndices.filter(
+            (index) =>
+              Number.isInteger(index) && index >= 0 && index < this.items.length
+          );
+
+          if (!this.multiple && safeIndices.length > 0) {
+            return new Set([safeIndices[0]]);
+          }
+
+          return new Set(safeIndices);
+        }
+
+        getTriggerId(id) {
+          return `${this.instanceId}-trigger-${id}`;
+        }
+
+        getPanelId(id) {
+          return `${this.instanceId}-panel-${id}`;
+        }
+
+        render() {
+          const itemsMarkup = this.items
+            .map((item, index) => {
+              const isOpen = this.openIndices.has(index);
+              const triggerId = this.getTriggerId(item.id);
+              const panelId = this.getPanelId(item.id);
+
+              return `
+                <div class="accordion__item" data-index="${index}">
+                  <h3 class="accordion__header">
+                    <button
+                      id="${triggerId}"
+                      class="accordion__trigger"
+                      type="button"
+                      aria-expanded="${isOpen}"
+                      aria-controls="${panelId}"
+                      data-index="${index}"
+                    >
+                      <span>${item.title}</span>
+                      <span class="accordion__icon" aria-hidden="true">+</span>
+                    </button>
+                  </h3>
+
+                  <div
+                    id="${panelId}"
+                    class="accordion__panel"
+                    role="region"
+                    aria-labelledby="${triggerId}"
+                    ${isOpen ? "" : "hidden"}
+                  >
+                    ${item.content}
+                  </div>
+                </div>
+              `;
+            })
+            .join("");
+
+          this.root.innerHTML = `
+            <div class="accordion" aria-label="${this.ariaLabel}">
+              ${itemsMarkup}
+            </div>
+          `;
+        }
+
+        cacheDom() {
+          this.accordion = this.root.querySelector(".accordion");
+          this.triggers = Array.from(
+            this.root.querySelectorAll(".accordion__trigger")
+          );
+          this.panels = Array.from(
+            this.root.querySelectorAll(".accordion__panel")
+          );
+        }
+
+        bindEvents() {
+          this.handleClick = this.onClick.bind(this);
+          this.handleKeydown = this.onKeyDown.bind(this);
+
+          this.accordion.addEventListener("click", this.handleClick);
+          this.accordion.addEventListener("keydown", this.handleKeydown);
+        }
+
+        onClick(event) {
+          const trigger = event.target.closest(".accordion__trigger");
+          if (!trigger || !this.accordion.contains(trigger)) return;
+
+          const index = Number(trigger.dataset.index);
+          this.toggle(index);
+        }
+
+        onKeyDown(event) {
+          const trigger = event.target.closest(".accordion__trigger");
+          if (!trigger) return;
+
+          const currentIndex = Number(trigger.dataset.index);
+          let nextIndex = currentIndex;
+
+          switch (event.key) {
+            case "ArrowDown":
+              event.preventDefault();
+              nextIndex = (currentIndex + 1) % this.triggers.length;
+              this.triggers[nextIndex].focus();
+              break;
+
+            case "ArrowUp":
+              event.preventDefault();
+              nextIndex =
+                (currentIndex - 1 + this.triggers.length) % this.triggers.length;
+              this.triggers[nextIndex].focus();
+              break;
+
+            case "Home":
+              event.preventDefault();
+              this.triggers[0].focus();
+              break;
+
+            case "End":
+              event.preventDefault();
+              this.triggers[this.triggers.length - 1].focus();
+              break;
+
+            case "Enter":
+            case " ":
+              event.preventDefault();
+              this.toggle(currentIndex);
+              break;
+          }
+        }
+
+        toggle(index) {
+          if (!Number.isInteger(index) || index < 0 || index >= this.items.length) {
+            return;
+          }
+
+          const isOpen = this.openIndices.has(index);
+          const changedIndices = new Set([index]);
+        
+          if (this.multiple) {
+            if (isOpen) {
+              this.openIndices.delete(index);
+            } else {
+              this.openIndices.add(index);
+            }
+          } else {
+            const previousOpenIndex = [...this.openIndices][0];
+
+            if (isOpen) {
+              this.openIndices.clear();
+            } else {
+              this.openIndices.clear();
+              this.openIndices.add(index);
+
+              if (
+                previousOpenIndex !== undefined &&
+                previousOpenIndex !== index
+              ) {
+                changedIndices.add(previousOpenIndex);
+              }
+            }
+          }
+
+          changedIndices.forEach((changedIndex) => {
+            this.updateItem(changedIndex);
+          });
+
+          if (this.onChange) {
+            this.onChange({
+              openIndices: [...this.openIndices],
+              openItems: [...this.openIndices].map((openIndex) => this.items[openIndex])
+            });
+          }
+        }
+
+        updateItem(index) {
+          const trigger = this.triggers[index];
+          const panel = this.panels[index];
+          const isOpen = this.openIndices.has(index);
+
+          if (!trigger || !panel) return;
+
+          trigger.setAttribute("aria-expanded", String(isOpen));
+          panel.hidden = !isOpen;
+        }
+
+        destroy() {
+          if (this.accordion) {
+            this.accordion.removeEventListener("click", this.handleClick);
+            this.accordion.removeEventListener("keydown", this.handleKeydown);
+          }
+
+          this.root.innerHTML = "";
+          this.accordion = null;
+          this.triggers = [];
+          this.panels = [];
+          this.openIndices.clear();
+        }
+      }
+
+      let faqAccordion = null;
+
+      function createAccordion() {
+        faqAccordion = new Accordion({
+          container: "#faq-accordion",
+          multiple: false,
+          defaultOpenIndices: [0],
+          ariaLabel: "Frequently asked questions",
+          items: [
+            {
+              id: "what-is-linkedin",
+              title: "What is LinkedIn?",
+              content: `
+                <p>
+                  LinkedIn is a professional networking platform where people connect,
+                  share work history, and discover job opportunities.
+                </p>
+              `
+            },
+            {
+              id: "how-to-prepare",
+              title: "How should I prepare for a frontend interview?",
+              content: `
+                <p>
+                  Practice JavaScript fundamentals, DOM manipulation, one or two
+                  reusable UI components, and a few DSA questions on arrays,
+                  strings, hash maps, and trees.
+                </p>
+              `
+            },
+            {
+              id: "what-is-accessibility",
+              title: "Why is accessibility important in UI components?",
+              content: `
+                <p>
+                  Accessibility ensures your components work for keyboard users,
+                  assistive technologies, and a wider range of users overall.
+                </p>
+              `
+            }
+          ],
+          onChange: ({ openIndices }) => {
+            console.log("Open indices:", openIndices);
+          }
+        });
+      }
+
+      document.getElementById("destroy-btn").addEventListener("click", () => {
+        if (faqAccordion) {
+          faqAccordion.destroy();
+          faqAccordion = null;
+        }
+      });
+
+      document.getElementById("create-btn").addEventListener("click", () => {
+        if (!faqAccordion) {
+          createAccordion();
+        }
+      });
+
+      createAccordion();
+    </script>
+  </body>
+</html>
