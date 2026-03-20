@@ -1,0 +1,22 @@
+*{
+    box-sizing: border-box;
+}
+
+
+body{
+    margin:40px auto;
+    display: grid;
+    gap: 24px;
+    width: 60%;
+}
+button{
+    width: 200px; 
+    display: inline;
+}
+
+
+.autocomplete-container > input:first-child{
+    padding: 10px;
+    border: 1px solid #efefef;
+    width: 100%;
+}

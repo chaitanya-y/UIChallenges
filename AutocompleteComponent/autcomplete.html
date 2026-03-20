@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reusable Accessible Autocomplete</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 40px;
+        font-family: Arial, sans-serif;
+        background: #f5f5f5;
+      }
+
+      .controls {
+        max-width: 720px;
+        margin: 0 auto 16px;
+        display: flex;
+        gap: 12px;
+      }
+
+      .controls button {
+        padding: 10px 14px;
+        border: 1px solid #ccc;
+        background: white;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+
+      .autocomplete {
+        position: relative;
+        max-width: 720px;
+        margin: 0 auto;
+      }
+
+      .autocomplete__input {
+        width: 100%;
+        padding: 14px 16px;
+        border: 1px solid #ccc;
+        border-radius: 12px;
+        font-size: 16px;
+        outline: none;
+      }
+
+      .autocomplete__input:focus {
+        border-color: #111;
+      }
+
+      .autocomplete__dropdown {
+        position: absolute;
+        top: calc(100% + 8px);
+        left: 0;
+        right: 0;
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 12px;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+        overflow: hidden;
+        z-index: 10;
+      }
+
+      .autocomplete__dropdown[hidden] {
+        display: none;
+      }
+
+      .autocomplete__option {
+        padding: 12px 16px;
+        cursor: pointer;
+      }
+
+      .autocomplete__option:hover,
+      .autocomplete__option.is-active {
+        background: #f3f3f3;
+      }
+
+      .autocomplete__empty {
+        padding: 12px 16px;
+        color: #666;
+      }
+
+      mark {
+        background: #ffe58a;
+        padding: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="controls">
+      <button id="destroy-btn">Destroy</button>
+      <button id="create-btn">Create</button>
+    </div>
+
+    <div id="autocomplete-root"></div>
+
+    <script>
+      class Autocomplete {
+        static instanceCount = 0;
+
+        constructor({
+          container,
+          items = [],
+          placeholder = "Search...",
+          minChars = 1,
+          maxResults = 5,
+          ariaLabel = "Autocomplete suggestions",
+          onSelect = null
+        }) {
+          this.root =
+            typeof container === "string"
+              ? document.querySelector(container)
+              : container;
+
+          if (!this.root) {
+            throw new Error("Autocomplete: container not found.");
+          }
+
+          if (!Array.isArray(items)) {
+            throw new Error("Autocomplete: items must be an array.");
+          }
+
+          this.items = items;
+          this.placeholder = placeholder;
+          this.minChars = minChars;
+          this.maxResults = maxResults;
+          this.ariaLabel = ariaLabel;
+          this.onSelect = typeof onSelect === "function" ? onSelect : null;
+
+          this.instanceId = `autocomplete-${Autocomplete.instanceCount++}`;
+          this.filteredItems = [];
+          this.activeIndex = -1;
+          this.isOpen = false;
+
+          this.render();
+          this.cacheDom();
+          this.bindEvents();
+        }
+
+        render() {
+          this.root.innerHTML = `
+            <div class="autocomplete">
+              <input
+                id="${this.instanceId}-input"
+                class="autocomplete__input"
+                type="text"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded="false"
+                aria-controls="${this.instanceId}-listbox"
+                aria-activedescendant=""
+                autocomplete="off"
+                placeholder="${this.placeholder}"
+              />
+
+              <div
+                id="${this.instanceId}-listbox"
+                class="autocomplete__dropdown"
+                role="listbox"
+                aria-label="${this.ariaLabel}"
+                hidden
+              ></div>
+            </div>
+          `;
+        }
+
+        cacheDom() {
+          this.input = this.root.querySelector(".autocomplete__input");
+          this.dropdown = this.root.querySelector(".autocomplete__dropdown");
+        }
+
+        bindEvents() {
+          this.handleInput = this.onInput.bind(this);
+          this.handleKeyDown = this.onKeyDown.bind(this);
+          this.handleClick = this.onClick.bind(this);
+          this.handleDocumentClick = this.onDocumentClick.bind(this);
+
+          this.input.addEventListener("input", this.handleInput);
+          this.input.addEventListener("keydown", this.handleKeyDown);
+          this.dropdown.addEventListener("click", this.handleClick);
+          document.addEventListener("click", this.handleDocumentClick);
+        }
+
+        normalize(value) {
+          return String(value).toLowerCase().trim();
+        }
+
+        filterItems(query) {
+          const normalizedQuery = this.normalize(query);
+
+          return this.items
+            .filter((item) => this.normalize(item.label).includes(normalizedQuery))
+            .slice(0, this.maxResults);
+        }
+
+        highlightMatch(label, query) {
+          if (!query) return label;
+
+          const normalizedLabel = label.toLowerCase();
+          const normalizedQuery = query.toLowerCase();
+          const startIndex = normalizedLabel.indexOf(normalizedQuery);
+
+          if (startIndex === -1) return label;
+
+          const endIndex = startIndex + query.length;
+
+          return `
+            ${label.slice(0, startIndex)}
+            <mark>${label.slice(startIndex, endIndex)}</mark>
+            ${label.slice(endIndex)}
+          `;
+        }
+
+        onInput(event) {
+          const query = event.target.value.trim();
+
+          if (query.length < this.minChars) {
+            this.filteredItems = [];
+            this.activeIndex = -1;
+            this.closeDropdown();
+            return;
+          }
+
+          this.filteredItems = this.filterItems(query);
+          this.activeIndex = this.filteredItems.length > 0 ? 0 : -1;
+          this.renderDropdown(query);
+          this.openDropdown();
+          this.updateActiveDescendant();
+        }
+
+        onKeyDown(event) {
+          if (!this.isOpen && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            if (this.filteredItems.length > 0) {
+              this.openDropdown();
+            }
+            return;
+          }
+
+          switch (event.key) {
+            case "ArrowDown":
+              event.preventDefault();
+              if (this.filteredItems.length === 0) return;
+              this.activeIndex = (this.activeIndex + 1) % this.filteredItems.length;
+              this.renderDropdown(this.input.value.trim());
+              this.updateActiveDescendant();
+              break;
+
+            case "ArrowUp":
+              event.preventDefault();
+              if (this.filteredItems.length === 0) return;
+              this.activeIndex =
+                (this.activeIndex - 1 + this.filteredItems.length) %
+                this.filteredItems.length;
+              this.renderDropdown(this.input.value.trim());
+              this.updateActiveDescendant();
+              break;
+
+            case "Enter":
+              if (!this.isOpen || this.activeIndex < 0) return;
+              event.preventDefault();
+              this.selectItem(this.filteredItems[this.activeIndex]);
+              break;
+
+            case "Escape":
+              if (!this.isOpen) return;
+              event.preventDefault();
+              this.closeDropdown();
+              break;
+
+            default:
+              break;
+          }
+        }
+
+        onClick(event) {
+          const option = event.target.closest(".autocomplete__option");
+          if (!option) return;
+
+          const index = Number(option.dataset.index);
+          const item = this.filteredItems[index];
+
+          if (!item) return;
+
+          this.selectItem(item);
+        }
+
+        onDocumentClick(event) {
+          if (!this.root.contains(event.target)) {
+            this.closeDropdown();
+          }
+        }
+
+        renderDropdown(query) {
+          if (this.filteredItems.length === 0) {
+            this.dropdown.innerHTML = `
+              <div class="autocomplete__empty">No results found</div>
+            `;
+            return;
+          }
+
+          this.dropdown.innerHTML = this.filteredItems
+            .map((item, index) => {
+              const isActive = index === this.activeIndex;
+              return `
+                <div
+                  id="${this.instanceId}-option-${index}"
+                  class="autocomplete__option ${isActive ? "is-active" : ""}"
+                  role="option"
+                  aria-selected="${isActive}"
+                  data-index="${index}"
+                >
+                  ${this.highlightMatch(item.label, query)}
+                </div>
+              `;
+            })
+            .join("");
+        }
+
+        updateActiveDescendant() {
+          if (this.activeIndex < 0) {
+            this.input.setAttribute("aria-activedescendant", "");
+            return;
+          }
+
+          this.input.setAttribute(
+            "aria-activedescendant",
+            `${this.instanceId}-option-${this.activeIndex}`
+          );
+        }
+
+        openDropdown() {
+          this.dropdown.hidden = false;
+          this.input.setAttribute("aria-expanded", "true");
+          this.isOpen = true;
+        }
+
+        closeDropdown() {
+          this.dropdown.hidden = true;
+          this.input.setAttribute("aria-expanded", "false");
+          this.input.setAttribute("aria-activedescendant", "");
+          this.activeIndex = -1;
+          this.isOpen = false;
+        }
+
+        selectItem(item) {
+          this.input.value = item.label;
+          this.closeDropdown();
+
+          if (this.onSelect) {
+            this.onSelect(item);
+          }
+        }
+
+        destroy() {
+          this.input.removeEventListener("input", this.handleInput);
+          this.input.removeEventListener("keydown", this.handleKeyDown);
+          this.dropdown.removeEventListener("click", this.handleClick);
+          document.removeEventListener("click", this.handleDocumentClick);
+
+          this.root.innerHTML = "";
+          this.input = null;
+          this.dropdown = null;
+          this.filteredItems = [];
+          this.activeIndex = -1;
+          this.isOpen = false;
+        }
+      }
+
+      let autocompleteInstance = null;
+
+      function createAutocomplete() {
+        autocompleteInstance = new Autocomplete({
+          container: "#autocomplete-root",
+          placeholder: "Search frontend topics...",
+          minChars: 1,
+          maxResults: 6,
+          items: [
+            { id: 1, label: "JavaScript" },
+            { id: 2, label: "TypeScript" },
+            { id: 3, label: "React" },
+            { id: 4, label: "Accessibility" },
+            { id: 5, label: "Performance Optimization" },
+            { id: 6, label: "Event Delegation" },
+            { id: 7, label: "Async Await" },
+            { id: 8, label: "Promises" },
+            { id: 9, label: "CSS Grid" },
+            { id: 10, label: "Flexbox" },
+            { id: 11, label: "Debounce" },
+            { id: 12, label: "Throttle" }
+          ],
+          onSelect: (item) => {
+            console.log("Selected item:", item);
+          }
+        });
+      }
+
+      document.getElementById("destroy-btn").addEventListener("click", () => {
+        if (autocompleteInstance) {
+          autocompleteInstance.destroy();
+          autocompleteInstance = null;
+        }
+      });
+
+      document.getElementById("create-btn").addEventListener("click", () => {
+        if (!autocompleteInstance) {
+          createAutocomplete();
+        }
+      });
+
+      createAutocomplete();
+    </script>
+  </body>
+</html>
